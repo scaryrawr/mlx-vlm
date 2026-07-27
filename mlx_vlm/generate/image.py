@@ -151,6 +151,7 @@ def _model_type_from_id(model: str) -> str:
     name = model_id.rsplit("/", 1)[-1]
     model_type = name.split("-", 1)[0]
     return {
+        "ernie": "ernie_image",
         "ternary": "bonsai",
         "2bit": "bonsai",
         "flux.2": "flux2",
@@ -254,6 +255,13 @@ def _image_model_type_from_component_indexes(root: Path) -> str | None:
     }
     if flux2_markers <= keys:
         return "flux2"
+    ernie_image_markers = {
+        "x_embedder.proj.weight",
+        "text_proj.weight",
+        "layers.0.self_attention.to_q.weight",
+    }
+    if ernie_image_markers <= keys:
+        return "ernie_image"
     return None
 
 
