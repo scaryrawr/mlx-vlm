@@ -5,6 +5,7 @@ import mlx.nn as nn
 from .encoder_loader import load_encoder_model
 
 EMBEDDING_MODEL_REMAPPING = {
+    "qwen2": "qwen2_embedding",
     "qwen3": "qwen3_embedding",
     "gemma3_text": "gemma3_embedding",
     "lfm2": "lfm2_embedding",
