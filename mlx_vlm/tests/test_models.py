@@ -16519,6 +16519,89 @@ class TestQwen3Embedding(unittest.TestCase):
         self.assertTrue(mx.allclose(norms, mx.ones(batch), atol=1e-4).item())
 
 
+class TestQwen2Embedding(unittest.TestCase):
+    def _model(self):
+        from mlx_vlm.models import qwen2_embedding
+
+        config = qwen2_embedding.ModelConfig(
+            model_type="qwen2",
+            hidden_size=16,
+            num_hidden_layers=2,
+            intermediate_size=32,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            vocab_size=64,
+            max_position_embeddings=128,
+            rms_norm_eps=1e-6,
+            rope_theta=1000000.0,
+            tie_word_embeddings=False,
+        )
+        return qwen2_embedding.Model(config), config
+
+    def test_qwen2_embedding_forward(self):
+        model, config = self._model()
+        output = model(
+            mx.array([[1, 2, 3, 0, 0]], dtype=mx.int32),
+            attention_mask=mx.array([[1, 1, 1, 0, 0]], dtype=mx.int32),
+        )
+
+        self.assertEqual(output.last_hidden_state.shape, (1, 5, config.hidden_size))
+        self.assertEqual(output.text_embeds.shape, (1, config.hidden_size))
+        self.assertTrue(
+            mx.allclose(mx.linalg.norm(output.text_embeds, axis=-1), mx.ones(1)).item()
+        )
+
+    def test_qwen2_embedding_supports_left_padding(self):
+        model, _ = self._model()
+        output = model(
+            mx.array([[0, 0, 1, 2, 3]], dtype=mx.int32),
+            attention_mask=mx.array([[0, 0, 1, 1, 1]], dtype=mx.int32),
+        )
+
+        self.assertFalse(mx.any(mx.isnan(output.text_embeds)).item())
+
+    def test_qwen2_embedding_sanitize_drops_lm_head(self):
+        model, _ = self._model()
+        weights = model.sanitize(
+            {
+                "embed_tokens.weight": mx.zeros((64, 16)),
+                "model.norm.weight": mx.ones((16,)),
+                "lm_head.weight": mx.zeros((64, 16)),
+            }
+        )
+
+        self.assertEqual(
+            sorted(weights), ["model.embed_tokens.weight", "model.norm.weight"]
+        )
+
+    def test_qwen2_is_remapped_to_embedding_model(self):
+        from mlx_vlm.embedding_loader import EMBEDDING_MODEL_REMAPPING
+
+        self.assertEqual(EMBEDDING_MODEL_REMAPPING["qwen2"], "qwen2_embedding")
+
+    def test_qwen2_embedding_loads_bare_checkpoint_keys(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from mlx_vlm.embedding_loader import load_embedding_model
+
+        model, config = self._model()
+        weights = {
+            key.removeprefix("model."): value
+            for key, value in tree_flatten(model.parameters())
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp)
+            (model_dir / "config.json").write_text(json.dumps(config.to_dict()))
+            mx.save_safetensors(str(model_dir / "model.safetensors"), weights)
+
+            loaded = load_embedding_model(model_dir)
+            output = loaded(mx.array([[1, 2, 3]], dtype=mx.int32))
+
+        self.assertEqual(output.text_embeds.shape, (1, config.hidden_size))
+
+
 class TestGemma3Embedding(unittest.TestCase):
     def test_gemma3_embedding_forward(self):
         from mlx_vlm.models import gemma3_embedding
