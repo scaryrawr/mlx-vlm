@@ -16519,6 +16519,83 @@ class TestQwen3Embedding(unittest.TestCase):
         self.assertTrue(mx.allclose(norms, mx.ones(batch), atol=1e-4).item())
 
 
+class TestNomicBertEmbedding(unittest.TestCase):
+    def _model(self):
+        from mlx_vlm.models import nomic_bert
+
+        config = nomic_bert.ModelConfig(
+            model_type="nomic_bert",
+            n_embd=16,
+            n_layer=2,
+            n_head=4,
+            n_inner=32,
+            vocab_size=64,
+            max_trained_positions=64,
+        )
+        return nomic_bert.Model(config), config
+
+    def test_nomic_bert_embedding_forward(self):
+        model, config = self._model()
+        output = model(
+            mx.array([[1, 2, 3, 0, 0]], dtype=mx.int32),
+            attention_mask=mx.array([[1, 1, 1, 0, 0]], dtype=mx.int32),
+        )
+
+        self.assertEqual(output.last_hidden_state.shape, (1, 5, config.hidden_size))
+        self.assertEqual(output.text_embeds.shape, (1, config.hidden_size))
+        self.assertTrue(
+            mx.allclose(mx.linalg.norm(output.text_embeds, axis=-1), mx.ones(1)).item()
+        )
+
+    def test_nomic_bert_accepts_transformers_config_names(self):
+        from mlx_vlm.models import nomic_bert
+
+        config = nomic_bert.ModelConfig(
+            hidden_size=16,
+            num_hidden_layers=1,
+            num_attention_heads=4,
+            intermediate_size=32,
+        )
+
+        self.assertEqual(config.n_embd, 16)
+        self.assertEqual(config.n_layer, 1)
+        self.assertEqual(config.n_head, 4)
+        self.assertEqual(config.n_inner, 32)
+
+    def test_nomic_bert_sanitize_keeps_top_level_keys(self):
+        model, _ = self._model()
+        weights = model.sanitize(
+            {
+                "embeddings.word_embeddings.weight": mx.zeros((64, 16)),
+                "encoder.layers.0.attn.Wqkv.weight": mx.zeros((48, 16)),
+                "encoder.layers.0.attn.rotary_emb.inv_freq": mx.zeros((2,)),
+            }
+        )
+
+        self.assertIn("embeddings.word_embeddings.weight", weights)
+        self.assertIn("encoder.layers.0.attn.Wqkv.weight", weights)
+        self.assertNotIn("encoder.layers.0.attn.rotary_emb.inv_freq", weights)
+
+    def test_nomic_bert_embedding_loads_checkpoint(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from mlx_vlm.embedding_loader import load_embedding_model
+
+        model, config = self._model()
+        weights = dict(tree_flatten(model.parameters()))
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp)
+            (model_dir / "config.json").write_text(json.dumps(config.to_dict()))
+            mx.save_safetensors(str(model_dir / "model.safetensors"), weights)
+
+            loaded = load_embedding_model(model_dir)
+            output = loaded(mx.array([[1, 2, 3]], dtype=mx.int32))
+
+        self.assertEqual(output.text_embeds.shape, (1, config.hidden_size))
+
+
 class TestGemma3Embedding(unittest.TestCase):
     def test_gemma3_embedding_forward(self):
         from mlx_vlm.models import gemma3_embedding
